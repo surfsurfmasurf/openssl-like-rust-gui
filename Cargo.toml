@@ -1,0 +1,48 @@
+[package]
+name = "openssl-like"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# GUI
+iced = { version = "0.13", features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+# Hashing
+sha1 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
+md-5 = "0.10"
+digest = { version = "0.10", features = ["oid"] }
+
+# Symmetric encryption
+aes-gcm = "0.10"
+cbc = { version = "0.1", features = ["std"] }
+aes = "0.8"
+des = "0.8"
+cipher = { version = "0.4", features = ["std"] }
+
+# Asymmetric keys
+rsa = { version = "0.9", features = ["pem"] }
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+p384 = { version = "0.13", features = ["ecdsa", "pem"] }
+ecdsa = { version = "0.16", features = ["signing", "verifying", "pem"] }
+pkcs8 = { version = "0.10", features = ["pem"] }
+elliptic-curve = { version = "0.13", features = ["pem"] }
+signature = "2"
+
+# Certificates
+rcgen = "0.13"
+x509-parser = "0.16"
+pem = "3"
+
+# Encoding & random
+base64 = "0.22"
+rand = "0.8"
+
+# TLS
+rustls = "0.23"
+webpki-roots = "0.26"
+
+# Utilities
+hex = "0.4"
+thiserror = "2"
