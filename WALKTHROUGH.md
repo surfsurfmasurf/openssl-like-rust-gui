@@ -1,634 +1,649 @@
-# 코드 워크스루: 자동차에 비유해서 이해하기
+# 코드 워크스루: 요청 하나를 따라가는 여행
 
-이 문서는 Rust를 몰라도 이 프로젝트의 구조와 동작 원리를 이해할 수 있도록,
-**자동차**에 비유하여 설명합니다.
+이 문서는 사용자의 **클릭 한 번**이 코드 내부에서 어떻게 흘러가는지를
+두 가지 시나리오로 처음부터 끝까지 따라갑니다.
 
 ---
 
-## 1. 이 프로그램은 자동차다
+## 시나리오 1: SHA-256 해시 계산 (가장 단순한 흐름)
 
-이 프로그램을 하나의 자동차로 생각해봅시다.
+> 사용자 행동: Hash 탭에서 "hello"를 입력하고 [Compute Hash] 버튼 클릭
+
+### STEP 0: 앱이 시작될 때
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                        자동차                            │
-│                                                         │
-│   ┌──────────┐   ┌──────────────┐   ┌───────────────┐   │
-│   │ 대시보드  │   │   운전석     │   │    엔진       │   │
-│   │(sidebar) │   │  (app.rs)    │   │  (crypto/)    │   │
-│   │          │   │              │   │               │   │
-│   │ 버튼들:  │   │ 핸들을 돌리면│   │ 실제로 바퀴를 │   │
-│   │ Hash     │   │ 어디로 갈지  │   │ 굴리는 힘     │   │
-│   │ 암호화   │   │ 결정         │   │               │   │
-│   │ 인증서   │   │              │   │ 해시 엔진     │   │
-│   │ ...      │   │              │   │ 암호화 엔진   │   │
-│   └──────────┘   └──────────────┘   │ 서명 엔진     │   │
-│                                     └───────────────┘   │
-│                                                         │
-│   ┌─────────────────────────────────────────────────┐   │
-│   │              계기판 (상태바)                      │   │
-│   │   "SHA-256 hash computed" / "Ready" / "Error"   │   │
-│   └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
+main.rs:9  →  iced::application("OpenSSL Tool", App::update, App::view)
+                   .run_with(App::new)
 ```
 
-| 자동차 부품 | 프로그램 부품 | 하는 일 |
+`iced::application()`에 3개의 함수 포인터를 등록합니다:
+- **제목**: `"OpenSSL Tool - Rust Edition"`
+- **update**: `App::update` — 모든 이벤트 처리
+- **view**: `App::view` — 매 프레임 UI 렌더링
+
+`run_with(App::new)`가 호출되면:
+
+```
+app.rs:57  →  App::new() → (App { active_tab: Tab::Hashing, ... }, Task::none())
+```
+
+11개 탭의 초기 상태가 모두 생성됩니다. `hash_state`의 초기값:
+
+```
+hash_tab.rs:22  →  State {
+                      algorithm: Some(HashAlgorithm::Sha256),  // 기본값 SHA-256
+                      input: "",
+                      result: "",
+                    }
+```
+
+---
+
+### STEP 1: 화면 렌더링 — `App::view()` 호출
+
+iced는 매 프레임마다 `view()`를 호출하여 전체 UI 트리를 다시 만듭니다.
+
+```
+app.rs:159  →  pub fn view(&self) -> Element<'_, Message> {
+
+app.rs:160  →      let sidebar = sidebar::view(&self.active_tab);
+                    // 사이드바: 11개 탭 버튼 렌더링
+```
+
+`sidebar.rs`에서 `TABS` 배열을 순회하며 각 버튼을 만듭니다:
+
+```
+sidebar.rs:57  →  button(label).on_press(Message::TabSelected(sb.tab))
+                  // 클릭하면 Message::TabSelected(Tab::Hashing) 발생
+```
+
+활성 탭이 `Tab::Hashing`이므로:
+
+```
+app.rs:163  →  Tab::Hashing => hash_tab::view(&self.hash_state).map(Message::Hash),
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                               hash_tab 모듈이 자기만의 Element<Msg> 반환
+                                                                .map(Message::Hash)
+                                                                ~~~~~~~~~~~~~~~~~~~~
+                                                                hash_tab::Msg를 App의 Message::Hash로 래핑
+```
+
+#### hash_tab::view() 내부
+
+```
+hash_tab.rs:52  →  pub fn view(state: &State) -> Element<'_, Msg> {
+```
+
+이 함수가 만드는 위젯 트리:
+
+```
+card (흰색 카드 컨테이너)
+  └── Column
+        ├── text "Hash Functions"              (제목)
+        ├── text "Compute cryptographic..."     (설명)
+        ├── vertical_space(15)
+        ├── text "Algorithm"
+        ├── pick_list [MD5, SHA-1, SHA-256▼, SHA-384, SHA-512]
+        │     └── on_select → Msg::AlgorithmSelected(algo)
+        ├── vertical_space(10)
+        ├── text "Input Text"
+        ├── text_input "Enter text to hash..."
+        │     └── on_input → Msg::InputChanged(val)    ← 키 입력마다 발생
+        ├── vertical_space(10)
+        ├── button "Compute Hash"
+        │     └── on_press → Msg::Compute              ← ★ 이 버튼!
+        ├── vertical_space(15)
+        └── (결과 영역 — 아직 비어있음)
+```
+
+**핵심**: 모든 위젯은 "이벤트가 발생하면 이 Msg를 보내라"는 선언만 합니다.
+실제 이벤트 처리는 `update()`에서 합니다.
+
+---
+
+### STEP 2: 사용자가 "hello" 입력
+
+사용자가 키보드로 `h`, `e`, `l`, `l`, `o`를 칠 때마다:
+
+```
+text_input → on_input → Msg::InputChanged("h")
+text_input → on_input → Msg::InputChanged("he")
+text_input → on_input → Msg::InputChanged("hel")
+text_input → on_input → Msg::InputChanged("hell")
+text_input → on_input → Msg::InputChanged("hello")
+```
+
+각 메시지는 `.map(Message::Hash)`를 거쳐 `Message::Hash(Msg::InputChanged("hello"))`로 래핑됩니다.
+
+```
+app.rs:88  →  Message::Hash(msg) => {
+app.rs:89  →      if let Some(status) = hash_tab::update(&mut self.hash_state, msg) {
+                                        ~~~~~~~~~~~~~~~~
+                                        hash_tab 모듈의 update에 위임
+```
+
+```
+hash_tab.rs:36  →  Msg::InputChanged(val) => {
+hash_tab.rs:37  →      state.input = val;    // "hello" 저장
+hash_tab.rs:38  →      None                  // 상태바 업데이트 없음
+                   }
+```
+
+상태가 변경되었으므로 iced가 `view()`를 다시 호출 → 입력 필드에 "hello" 표시.
+
+---
+
+### STEP 3: [Compute Hash] 클릭 — 이벤트 발생
+
+버튼 클릭 → `Msg::Compute` 생성 → `.map(Message::Hash)` → `Message::Hash(Msg::Compute)`.
+
+```
+app.rs:88  →  Message::Hash(msg) => {
+                  // msg = Msg::Compute
+app.rs:89  →      if let Some(status) = hash_tab::update(&mut self.hash_state, msg) {
+app.rs:90  →          self.status = status;
+                       // "SHA-256 hash computed" → 상태바에 표시
+                  }
+app.rs:92  →      Task::none()   // 비동기 작업 없음
+```
+
+---
+
+### STEP 4: hash_tab::update() — 암호 로직 호출
+
+```
+hash_tab.rs:40  →  Msg::Compute => {
+hash_tab.rs:41  →      if let Some(algo) = state.algorithm {
+                            // algo = HashAlgorithm::Sha256
+
+hash_tab.rs:42  →          state.result = hashing::compute_hash(algo, state.input.as_bytes());
+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                            crypto 레이어 호출! "hello".as_bytes() = [104, 101, 108, 108, 111]
+
+hash_tab.rs:43  →          Some(format!("{} hash computed", algo))
+                            // → Some("SHA-256 hash computed")
+                       }
+```
+
+**여기가 UI → crypto 경계입니다.**
+
+---
+
+### STEP 5: crypto::hashing::compute_hash() — 실제 해시 계산
+
+```
+hashing.rs:35  →  pub fn compute_hash(algorithm: HashAlgorithm, data: &[u8]) -> String {
+hashing.rs:36  →      match algorithm {
+                          ...
+hashing.rs:45  →          HashAlgorithm::Sha256 => {
+hashing.rs:46  →              let result = sha2::Sha256::digest(data);
+                              // sha2 크레이트의 Digest 트레잇 사용
+                              // data = [104, 101, 108, 108, 111]
+                              // result = [0x2c, 0xf2, 0x4d, 0xba, ...]  (32바이트)
+
+hashing.rs:47  →              hex::encode(result)
+                              // → "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e7304..."
+                          }
+```
+
+이 함수는:
+1. `sha2::Sha256::digest()` — Rust의 `digest::Digest` 트레잇 호출
+2. `hex::encode()` — 32바이트 → 64자 16진수 문자열로 변환
+
+**반환값**: `"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"`
+
+---
+
+### STEP 6: 결과 표시 — view() 재호출
+
+`state.result`에 값이 저장되었으므로, 다음 `view()` 호출에서:
+
+```
+hash_tab.rs:75  →  let result_section = if !state.result.is_empty() {
+                       // 이제 true!
+
+hash_tab.rs:77  →      let result_box = container(
+hash_tab.rs:78  →          text(&state.result)   // "2cf24dba..."
+hash_tab.rs:79  →              .size(13)
+hash_tab.rs:80  →              .font(iced::Font::MONOSPACE)   // 고정폭 글꼴
+                       );
+
+hash_tab.rs:96  →      let bit_len = state.result.len() * 4;
+                        // 64 * 4 = 256
+hash_tab.rs:97  →      let info = text(format!("{} bits ({} hex chars)", bit_len, state.result.len()));
+                        // "256 bits (64 hex chars)"
+```
+
+최종 UI:
+```
+┌──────────────────────────────────────────────┐
+│  Hash Functions                              │
+│  Compute cryptographic hash digests...       │
+│                                              │
+│  Algorithm: [SHA-256 ▼]                      │
+│                                              │
+│  Input Text:                                 │
+│  ┌──────────────────────────────────────┐    │
+│  │ hello                                │    │
+│  └──────────────────────────────────────┘    │
+│                                              │
+│  [Compute Hash]                              │
+│                                              │
+│  Result:                                     │
+│  ┌──────────────────────────────────────┐    │
+│  │ 2cf24dba5fb0a30e26e83b2ac5b9e29e... │    │
+│  └──────────────────────────────────────┘    │
+│  [Copy]  256 bits (64 hex chars)             │
+└──────────────────────────────────────────────┘
+  상태바: SHA-256 hash computed
+```
+
+---
+
+### 시나리오 1 전체 흐름 요약
+
+```
+[사용자 클릭]
+    │
+    ▼
+iced 런타임: 이벤트 감지
+    │
+    ▼
+hash_tab::view()에서 등록한 on_press
+    │  Msg::Compute 생성
+    ▼
+.map(Message::Hash) 래핑
+    │  Message::Hash(Msg::Compute)
+    ▼
+App::update() 패턴 매칭
+    │  Message::Hash(msg) 분기
+    ▼
+hash_tab::update(state, msg)
+    │  Msg::Compute 분기
+    ▼
+crypto::hashing::compute_hash(Sha256, b"hello")   ← UI→crypto 경계
+    │  sha2::Sha256::digest() + hex::encode()
+    ▼
+state.result = "2cf24dba..."  (상태 변경)
+    │
+    ▼
+iced 런타임: 상태 변경 감지 → view() 재호출
+    │
+    ▼
+hash_tab::view(): result가 비어있지 않으므로 결과 섹션 렌더링
+    │
+    ▼
+[화면에 해시 결과 표시]
+```
+
+---
+
+## 시나리오 2: AES-256-GCM 암호화 (복잡한 흐름)
+
+> 사용자 행동: Symmetric 탭 → AES-256 + GCM 선택 → Gen Key → Gen IV → "secret" 입력 → [Encrypt >>] 클릭
+
+이 시나리오는 여러 단계의 상호작용과 에러 처리를 포함합니다.
+
+### STEP 0: 탭 전환
+
+사이드바에서 "Symmetric" 클릭:
+
+```
+sidebar.rs:58  →  button(label).on_press(Message::TabSelected(Tab::SymmetricEncryption))
+```
+
+```
+app.rs:84  →  Message::TabSelected(tab) => {
+app.rs:85  →      self.active_tab = tab;     // Tab::SymmetricEncryption
+app.rs:86  →      Task::none()
+              }
+```
+
+다음 `view()`에서:
+
+```
+app.rs:164  →  Tab::SymmetricEncryption => {
+app.rs:165  →      symmetric_tab::view(&self.symmetric_state).map(Message::Symmetric)
+               }
+```
+
+이제 Symmetric 탭의 UI가 렌더링됩니다. 초기 상태:
+
+```
+symmetric_tab.rs:33  →  State {
+                           algorithm: Some(SymAlgorithm::Aes256),  // 기본
+                           mode: Some(CipherMode::Gcm),            // 기본
+                           key_hex: "",
+                           iv_hex: "",
+                           plaintext: "",
+                           ciphertext: "",
+                           error: "",
+                        }
+```
+
+---
+
+### STEP 1: [Gen Key] 클릭 — 키 생성
+
+```
+symmetric_tab.rs:139  →  styled_btn("Gen Key", Msg::GenerateKey)
+```
+
+클릭 → `Msg::GenerateKey` → `.map(Message::Symmetric)` → `Message::Symmetric(Msg::GenerateKey)`
+
+```
+app.rs:94  →  Message::Symmetric(msg) => {
+app.rs:95  →      if let Some(status) = symmetric_tab::update(&mut self.symmetric_state, msg) {
+```
+
+```
+symmetric_tab.rs:54  →  Msg::GenerateKey => {
+symmetric_tab.rs:55  →      if let Some(algo) = state.algorithm {
+                                 // algo = SymAlgorithm::Aes256
+
+symmetric_tab.rs:56  →          let key = symmetric::generate_key(algo);
+                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                                 crypto 레이어 호출!
+```
+
+#### crypto::symmetric::generate_key()
+
+```
+symmetric.rs:248  →  pub fn generate_key(algo: SymAlgorithm) -> Vec<u8> {
+symmetric.rs:249  →      use rand::RngCore;
+symmetric.rs:250  →      let mut key = vec![0u8; algo.key_size()];
+                          // algo.key_size() = 32 (AES-256은 32바이트 키)
+
+symmetric.rs:251  →      rand::rngs::OsRng.fill_bytes(&mut key);
+                          // OS의 CSPRNG(암호학적 보안 난수 생성기) 사용
+                          // Windows: BCryptGenRandom
+                          // Linux: getrandom() syscall
+
+symmetric.rs:252  →      key   // 예: [0xa3, 0x7f, 0x12, ..., 0xb9]  (32바이트)
+                  }
+```
+
+UI로 돌아와서:
+
+```
+symmetric_tab.rs:57  →  state.key_hex = hex::encode(&key);
+                         // → "a37f12...b9" (64자 hex 문자열)
+```
+
+→ view() 재호출 → Key 입력 필드에 자동 채워짐
+
+---
+
+### STEP 2: [Gen IV] 클릭 — IV/Nonce 생성
+
+같은 패턴:
+
+```
+symmetric_tab.rs:62  →  Msg::GenerateIv => {
+symmetric_tab.rs:63  →      let iv = symmetric::generate_iv(algo, mode);
+```
+
+```
+symmetric.rs:255  →  pub fn generate_iv(algo: SymAlgorithm, mode: CipherMode) -> Vec<u8> {
+symmetric.rs:257  →      let mut iv = vec![0u8; algo.iv_size(mode)];
+                          // GCM 모드: iv_size = 12 바이트 (96-bit nonce)
+                          // CBC 모드라면: iv_size = 16 바이트 (128-bit IV)
+
+symmetric.rs:258  →      rand::rngs::OsRng.fill_bytes(&mut iv);
+                  }
+```
+
+→ `state.iv_hex` = 24자 hex 문자열
+
+---
+
+### STEP 3: "secret" 입력
+
+매 키 입력마다:
+
+```
+symmetric_tab.rs:52  →  Msg::PlaintextChanged(v) => { state.plaintext = v; None }
+```
+
+---
+
+### STEP 4: [Encrypt >>] 클릭 — 핵심 흐름
+
+```
+symmetric_tab.rs:168  →  styled_btn("Encrypt >>", Msg::Encrypt)
+```
+
+→ `Message::Symmetric(Msg::Encrypt)` → `symmetric_tab::update()`
+
+```
+symmetric_tab.rs:68  →  Msg::Encrypt => {
+symmetric_tab.rs:69  →      let (algo, mode) = match (state.algorithm, state.mode) {
+symmetric_tab.rs:70  →          (Some(a), Some(m)) => (a, m),
+                                // a = SymAlgorithm::Aes256, m = CipherMode::Gcm
+symmetric_tab.rs:71  →          _ => return None,
+                            };
+```
+
+#### 4-1: Hex 문자열 → 바이트 디코딩
+
+```
+symmetric_tab.rs:73  →  match (hex::decode(&state.key_hex), hex::decode(&state.iv_hex)) {
+symmetric_tab.rs:74  →      (Ok(key), Ok(iv)) => {
+                                // key: Vec<u8> (32바이트)
+                                // iv: Vec<u8> (12바이트)
+```
+
+잘못된 hex를 입력했다면:
+
+```
+symmetric_tab.rs:84  →  _ => { state.error = "Invalid hex in key or IV".into(); None }
+```
+
+→ 에러 컨테이너 렌더링 (빨간 테두리 박스)
+
+#### 4-2: crypto::symmetric::encrypt() 호출
+
+```
+symmetric_tab.rs:75  →  match symmetric::encrypt(algo, mode, &key, &iv, state.plaintext.as_bytes()) {
+```
+
+```
+symmetric.rs:75   →  pub fn encrypt(algo, mode, key, iv, plaintext) -> Result<Vec<u8>, CryptoError> {
+symmetric.rs:82   →      match mode {
+symmetric.rs:83   →          CipherMode::Gcm => encrypt_gcm(algo, key, iv, plaintext),
+                              // GCM 분기로 진입
+```
+
+```
+symmetric.rs:101  →  fn encrypt_gcm(algo, key, nonce, plaintext) -> Result<...> {
+symmetric.rs:107  →      let nonce = GcmNonce::from_slice(nonce);
+                          // 12바이트 → GCM Nonce 타입으로 변환
+
+symmetric.rs:116  →      SymAlgorithm::Aes256 => {
+symmetric.rs:117  →          let cipher = Aes256Gcm::new_from_slice(key)
+                              // 32바이트 키로 AES-256-GCM 인스턴스 생성
+                              .map_err(|e| CryptoError::EncryptionFailed(...))?;
+
+symmetric.rs:119  →          cipher.encrypt(nonce, plaintext)
+                              // AEAD 암호화 수행:
+                              // 1. AES-256으로 평문 암호화
+                              // 2. GCM 인증 태그(16바이트) 생성
+                              // 3. ciphertext || auth_tag 반환
+                              .map_err(|e| CryptoError::EncryptionFailed(...))?
+                          }
+```
+
+반환값: `Ok(Vec<u8>)` — 암호문 + 인증 태그 (평문보다 16바이트 더 김)
+
+#### 4-3: 결과를 Base64로 인코딩
+
+```
+symmetric_tab.rs:76  →  Ok(ct) => {
+symmetric_tab.rs:77  →      use base64::{engine::general_purpose::STANDARD, Engine};
+symmetric_tab.rs:78  →      state.ciphertext = STANDARD.encode(&ct);
+                              // 바이너리 → Base64 문자열
+                              // 예: "AxK9f2...Qw=="
+
+symmetric_tab.rs:79  →      Some("Encrypted successfully".into())
+                              // → 상태바에 표시
+```
+
+#### 4-4: 에러가 발생한 경우
+
+만약 키 길이가 맞지 않으면:
+
+```
+symmetric.rs:117  →  Aes256Gcm::new_from_slice(key)  → Err(InvalidLength)
+                     → CryptoError::EncryptionFailed("invalid length")
+```
+
+이 에러가 UI까지 올라옵니다:
+
+```
+symmetric_tab.rs:81  →  Err(e) => { state.error = e.to_string(); None }
+```
+
+view()에서:
+
+```
+symmetric_tab.rs:186  →  if !state.error.is_empty() {
+                             container(text(&state.error).color(theme::ERROR))
+                                 .style(|_| container::Style {
+                                     background: Some(Color::from_rgb(1.0, 0.95, 0.95)),
+                                     border: Border { color: theme::ERROR, ... },
+                                 })
+                             // → 빨간 배경, 빨간 테두리의 에러 박스 표시
+```
+
+---
+
+### STEP 5: 결과 화면
+
+view() 재호출 → Ciphertext 필드에 Base64 값이 표시됨:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Symmetric Encryption                                           │
+│  AES (CBC/GCM), DES, 3DES encryption and decryption            │
+│                                                                 │
+│  [AES-256 ▼]  [GCM ▼]                                          │
+│                                                                 │
+│  Key (hex):                                                     │
+│  ┌────────────────────────────────────────────┐ [Gen Key]       │
+│  │ a37f12c8...e5b9 (64자)                     │                 │
+│  └────────────────────────────────────────────┘                 │
+│  IV / Nonce (hex):                                              │
+│  ┌────────────────────────────────────────────┐ [Gen IV]        │
+│  │ 8c3a7d...f1 (24자)                         │                 │
+│  └────────────────────────────────────────────┘                 │
+│                                                                 │
+│  ┌─ Plaintext ──────┐            ┌─ Ciphertext (Base64) ─────┐ │
+│  │ secret            │ [Encrypt>>]│ AxK9f2nR...Qw==           │ │
+│  │                   │ [<<Decrypt]│                            │ │
+│  └───────────────────┘            └───────────────────────────┘ │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+  상태바: Encrypted successfully
+```
+
+---
+
+### 시나리오 2 전체 흐름 요약
+
+```
+[Encrypt >> 클릭]
+     │
+     ▼
+iced: Msg::Encrypt 생성
+     │
+     ▼
+.map(Message::Symmetric) 래핑
+     │  Message::Symmetric(Msg::Encrypt)
+     ▼
+App::update()
+     │  Message::Symmetric(msg) → symmetric_tab::update() 위임
+     ▼
+symmetric_tab::update()
+     │  1. hex::decode(key_hex) → key: Vec<u8> 32바이트
+     │  2. hex::decode(iv_hex)  → iv: Vec<u8> 12바이트
+     ▼
+crypto::symmetric::encrypt(Aes256, Gcm, &key, &iv, b"secret")   ← UI→crypto 경계
+     │
+     ▼
+encrypt_gcm()
+     │  1. GcmNonce::from_slice(nonce)    ← nonce 타입 변환
+     │  2. Aes256Gcm::new_from_slice(key) ← 암호 인스턴스 생성
+     │  3. cipher.encrypt(nonce, plaintext) ← AEAD 암호화
+     ▼
+Ok(ciphertext_with_tag): Vec<u8>   (평문 + 16바이트 인증태그)
+     │
+     ▼ (crypto → UI 복귀)
+base64::STANDARD.encode(&ct)
+     │  바이너리 → "AxK9f2nR...Qw=="
+     ▼
+state.ciphertext = "AxK9f2nR...Qw=="  (상태 변경)
+state.status = "Encrypted successfully"
+     │
+     ▼
+iced: view() 재호출 → Ciphertext 필드에 결과 표시
+```
+
+---
+
+## 비동기 흐름이 추가되는 경우 (참고)
+
+Hash와 Symmetric은 동기 처리(즉시 완료)이지만,
+**RSA 키 생성**과 **TLS 연결**은 시간이 걸리므로 비동기 처리합니다.
+
+비동기 흐름은 `Task::perform()`을 사용합니다:
+
+```
+[Generate RSA-4096 클릭]
+     │
+     ▼
+Msg::Generate
+     │
+     ▼
+asymmetric_tab::update()
+     │  state.generating = true   (로딩 표시용)
+     │
+     ▼ Task::perform() 반환
+App::update()
+     │  task.map(Message::Asymmetric) → iced에 Task 등록
+     ▼
+iced 런타임: 백그라운드 스레드에서 RSA 키 생성 실행
+     │  (UI는 "Generating..." 표시하며 반응 유지)
+     │  ... 수 초 소요 ...
+     ▼
+완료 → Msg::Generated(Ok(keypair)) 발생
+     │
+     ▼
+asymmetric_tab::update()
+     │  state.public_key_pem = keypair.public
+     │  state.private_key_pem = keypair.private
+     │  state.generating = false
+     ▼
+view() 재호출 → PEM 키가 화면에 표시
+```
+
+핵심 차이: `Task::none()` 대신 `Task::perform(future, callback)`을 반환하면,
+iced가 future를 비동기로 실행하고 완료 시 callback 메시지를 발생시킵니다.
+
+---
+
+## 계층별 역할 정리
+
+| 계층 | 역할 | 예시 |
 |---|---|---|
-| **대시보드** (버튼, 스위치) | `ui/` 폴더 (11개 탭 파일) | 사용자가 누르고 입력하는 화면 |
-| **운전석** (핸들, 기어) | `app.rs` | 어떤 요청이 왔는지 판단하고 적절한 엔진에 전달 |
-| **엔진** (실제 동력) | `crypto/` 폴더 | 진짜 암호화/해시/서명 계산을 하는 곳 |
-| **계기판** | 상태바 | 지금 무슨 일이 일어났는지 표시 |
-| **차 외관 색상** | `theme.rs` | 버튼 색, 배경색, 글자색 결정 |
-| **시동 키** | `main.rs` | 프로그램 시작점. 창 크기 설정 후 앱 실행 |
+| **main.rs** | iced 앱 설정, 진입점 | 윈도우 크기, 제목, 테마 |
+| **app.rs** | 상태 소유, 메시지 라우팅 | `Message::Hash(msg)` → `hash_tab::update()` |
+| **ui/*_tab.rs** | 입력 검증, 데이터 변환, UI 렌더링 | hex 디코딩, Base64 인코딩, 위젯 구성 |
+| **crypto/*.rs** | 순수 암호 연산 | `&[u8]` → `Result<Vec<u8>>` |
+| **theme.rs** | 색상 상수 | `ACCENT`, `ERROR`, `SIDEBAR_BG` |
 
----
-
-## 2. 폴더 구조 = 자동차 부품 창고
-
+**데이터 흐름 방향**:
 ```
-openssl_like/
-├── src/
-│   ├── main.rs              ← 시동 키: "차 켜!"
-│   ├── app.rs               ← 운전석: 모든 조작을 여기서 중계
-│   ├── theme.rs             ← 외관 색상표
-│   │
-│   ├── crypto/              ← === 엔진룸 (보닛 아래) ===
-│   │   ├── hashing.rs       ←   해시 엔진 (고기 분쇄기)
-│   │   ├── symmetric.rs     ←   대칭암호 엔진 (금고)
-│   │   ├── asymmetric.rs    ←   비대칭키 엔진 (열쇠 제조기)
-│   │   ├── certificates.rs  ←   인증서 엔진 (신분증 발급기)
-│   │   ├── signatures.rs    ←   서명 엔진 (도장)
-│   │   ├── encoding.rs      ←   인코딩 엔진 (번역기)
-│   │   ├── random.rs        ←   난수 엔진 (주사위)
-│   │   ├── file_ops.rs      ←   파일암호화 엔진 (파일 금고)
-│   │   ├── tls.rs           ←   TLS 엔진 (전화 연결기)
-│   │   └── key_inspect.rs   ←   키 검사 엔진 (돋보기)
-│   │
-│   └── ui/                  ← === 대시보드 (운전자가 보는 화면) ===
-│       ├── sidebar.rs       ←   사이드 메뉴 (라디오 채널 버튼)
-│       ├── hash_tab.rs      ←   해시 화면
-│       ├── symmetric_tab.rs ←   대칭암호 화면
-│       ├── ...              ←   (각 기능마다 화면 하나씩)
-│       └── ciphers_tab.rs   ←   알고리즘 목록 화면
+사용자 입력 → iced 런타임 → App::update() → tab::update() → crypto 함수
+                                                                  │
+사용자 눈   ← iced 렌더링 ← App::view()  ← tab::view()  ← 상태 변경 ←┘
 ```
-
-**핵심 규칙**: 엔진(`crypto/`)은 대시보드(`ui/`)를 전혀 모릅니다.
-엔진은 "재료를 넣으면 결과를 뱉는 기계"일 뿐이고,
-대시보드가 사용자 입력을 받아서 엔진에 넘기고, 결과를 다시 화면에 보여줍니다.
-
-```
-사용자가 보는 것          뒤에서 일어나는 것
-─────────────            ─────────────────
-
-  [버튼 클릭]
-      │
-      ▼
-  대시보드(ui/)           "사용자가 이걸 눌렀어"
-      │
-      ▼
-  운전석(app.rs)          "아, 해시 관련이구나. 해시 담당한테 넘기자"
-      │
-      ▼
-  해시 화면(hash_tab)     "입력값 확인... 엔진에 보내자"
-      │
-      ▼
-  해시 엔진(hashing.rs)   "hello → 2cf24dba... 계산 완료!"
-      │
-      ▼
-  결과를 화면에 표시       "계기판: SHA-256 hash computed"
-```
-
----
-
-## 3. 시나리오 A: "hello"의 해시값 구하기
-
-> 자동차 비유: **고기 분쇄기에 고기를 넣으면, 다진 고기가 나온다**
->
-> 해시란? 어떤 글자를 넣으면 항상 같은 길이의 암호문이 나오는 것.
-> 원래 글자로 되돌릴 수는 없다. (다진 고기를 원래 고기로 되돌릴 수 없듯이)
-
-### 3-1. 시동 걸기 (앱 시작)
-
-```
-main.rs = 시동 키
-
-  "차를 켠다"
-  "창 크기는 1200x800"
-  "이름은 OpenSSL Tool"
-  "준비 완료!"
-```
-
-시동을 걸면 자동차(앱)가 초기 상태로 시작합니다:
-- 현재 채널(탭): Hash
-- 입력값: 비어있음
-- 결과: 비어있음
-- 계기판: "Ready"
-
-### 3-2. 화면이 그려지는 원리
-
-이 자동차의 대시보드는 특이합니다.
-**매 순간마다 대시보드를 통째로 새로 그립니다.**
-
-```
-               상태(State)
-                   │
-    ┌──────────────┼──────────────┐
-    │              │              │
-    ▼              ▼              ▼
-┌────────┐  ┌───────────┐  ┌──────────┐
-│사이드바 │  │ 탭 내용    │  │ 상태바   │
-│        │  │            │  │          │
-│ # Hash │  │ 알고리즘:  │  │ Ready    │
-│ E 대칭 │  │ [SHA-256▼] │  │          │
-│ K 비대칭│  │            │  └──────────┘
-│ C 인증서│  │ 입력: [  ] │
-│ ...    │  │            │
-│        │  │ [계산하기] │
-└────────┘  │            │
-            │ 결과: (없음)│
-            └───────────┘
-```
-
-마치 **TV 화면**처럼 — 현재 상태를 기반으로 매번 새로 그림을 그려서 보여줍니다.
-상태가 바뀌면? 바뀐 상태로 다시 그립니다.
-
-### 3-3. "hello" 타이핑
-
-키보드로 `h`, `e`, `l`, `l`, `o`를 칠 때마다 이런 일이 생깁니다:
-
-```
-키보드 'h' 입력
-    │
-    ▼
-대시보드: "입력값이 바뀌었어! 새 값은 'h'"  ← 쪽지(메시지)를 보냄
-    │
-    ▼
-운전석: "해시 탭 담당, 이 쪽지 처리해"
-    │
-    ▼
-해시 탭: "알겠어, 입력값을 'h'로 저장"
-    │
-    ▼
-화면 다시 그리기: 입력 칸에 'h' 표시
-```
-
-이걸 `h` → `he` → `hel` → `hell` → `hello` 까지 5번 반복합니다.
-
-### 3-4. [Compute Hash] 버튼 클릭 — 가장 중요한 순간!
-
-이 부분을 자동차 비유로 상세하게 따라갑니다:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│  1단계: 버튼을 누른다                                        │
-│  ───────────────                                            │
-│  운전자(사용자)가 대시보드의 [Compute Hash] 버튼을 누름       │
-│                                                             │
-│         ┌──────────────┐                                    │
-│         │ Compute Hash │  ← 뿅! 클릭!                      │
-│         └──────┬───────┘                                    │
-│                │                                            │
-│                ▼                                            │
-│                                                             │
-│  2단계: 쪽지가 만들어진다                                    │
-│  ──────────────────────                                     │
-│  대시보드가 쪽지를 만듦:                                     │
-│                                                             │
-│         ┌─────────────────┐                                 │
-│         │  쪽지            │                                 │
-│         │  보낸곳: Hash탭  │                                 │
-│         │  내용: "계산해!" │                                 │
-│         └────────┬────────┘                                 │
-│                  │                                          │
-│                  ▼                                          │
-│                                                             │
-│  3단계: 운전석이 쪽지를 받아서 분류한다                       │
-│  ──────────────────────────────────                         │
-│  운전석(app.rs): "이 쪽지는 Hash 관련이니까                  │
-│                   해시 담당한테 보내자"                       │
-│                                                             │
-│         ┌──────────┐     ┌──────────┐                       │
-│         │ 운전석   │ ──▶ │ 해시 담당 │                       │
-│         │ (app.rs) │     │(hash_tab)│                       │
-│         └──────────┘     └────┬─────┘                       │
-│                               │                             │
-│                               ▼                             │
-│                                                             │
-│  4단계: 해시 담당이 엔진에 재료를 넣는다                     │
-│  ──────────────────────────────────                         │
-│  해시 탭: "알고리즘은 SHA-256이고,                           │
-│            입력값은 'hello'니까...                           │
-│            엔진에 넣자!"                                    │
-│                                                             │
-│         ┌──────────┐     ┌───────────────┐                  │
-│         │ 해시 담당 │ ──▶ │  해시 엔진     │                  │
-│         │          │     │ (hashing.rs)  │                  │
-│         │ "hello"  │     │               │                  │
-│         │  SHA-256 │     │ ┌───────────┐ │                  │
-│         └──────────┘     │ │ 고기      │ │                  │
-│                          │ │ 분쇄기    │ │                  │
-│                          │ │           │ │                  │
-│                          │ │ hello ──▶ │ │                  │
-│                          │ │ 2cf24d... │ │                  │
-│                          │ └───────────┘ │                  │
-│                          └───────┬───────┘                  │
-│                                  │                          │
-│                                  ▼                          │
-│                                                             │
-│  5단계: 결과가 돌아온다                                      │
-│  ────────────────────                                       │
-│  엔진 결과: "2cf24dba5fb0a30e..."                            │
-│                                                             │
-│         해시 담당: "결과를 저장하고, 계기판에                 │
-│                    'SHA-256 hash computed'라고 표시"          │
-│                                                             │
-│                  │                                          │
-│                  ▼                                          │
-│                                                             │
-│  6단계: 화면이 다시 그려진다                                 │
-│  ────────────────────────                                   │
-│  상태가 바뀌었으니까 화면을 새로 그림:                        │
-│                                                             │
-│         ┌────────────────────────────┐                      │
-│         │ Result:                    │                      │
-│         │ ┌────────────────────────┐ │                      │
-│         │ │ 2cf24dba5fb0a30e26e... │ │  ← 결과 표시!        │
-│         │ └────────────────────────┘ │                      │
-│         │ 256 bits (64 hex chars)    │                      │
-│         └────────────────────────────┘                      │
-│                                                             │
-│  계기판: SHA-256 hash computed                               │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 3-5. 요약: 해시의 전체 여행
-
-```
-사용자 손가락 ──▶ [버튼] ──▶ 쪽지 생성 ──▶ 운전석이 분류
-                                              │
-                    화면 새로 그리기 ◀── 결과 저장 ◀── 엔진 가동
-```
-
-자동차로 비유하면:
-
-```
-1. 운전자가 버튼을 누름        = 사용자가 [Compute Hash] 클릭
-2. 대시보드가 쪽지를 만듦      = "계산해!" 라는 메시지 생성
-3. 운전석이 "해시 부서"로 전달  = app.rs가 hash_tab에 위임
-4. 해시 부서가 엔진에 재료 투입 = hash_tab이 hashing.rs 호출
-5. 엔진이 결과를 내놓음        = SHA-256 계산 완료
-6. 계기판 업데이트             = "SHA-256 hash computed"
-7. 대시보드 새로 그리기        = 결과 영역에 해시값 표시
-```
-
----
-
-## 4. 시나리오 B: AES-256 암호화
-
-> 자동차 비유: **금고에 보석을 넣고 잠그는 것**
->
-> 대칭 암호화란? 같은 열쇠(키)로 잠그고 여는 금고.
-> 열쇠를 아는 사람만 열 수 있다.
-
-이번엔 여러 단계가 필요합니다:
-
-```
-금고를 사용하려면:
-1. 어떤 금고를 쓸지 고른다 (AES-256, GCM 모드)
-2. 열쇠를 만든다 (Gen Key)
-3. 비밀번호도 만든다 (Gen IV — 같은 열쇠라도 매번 다른 결과를 위해)
-4. 보석을 넣고 잠근다 (Encrypt)
-```
-
-### 4-1. 탭 전환 = 라디오 채널 바꾸기
-
-```
-사이드바에서 "Symmetric" 클릭
-    │
-    ▼
-운전석: "채널을 '대칭암호'로 바꿔!"
-    │
-    ▼
-화면 다시 그리기: 대칭암호 화면이 나타남
-```
-
-이건 라디오 채널을 바꾸는 것과 같습니다.
-FM에서 AM으로 바꾸면 다른 프로그램이 나오듯이,
-Hash 탭에서 Symmetric 탭으로 바꾸면 다른 화면이 나옵니다.
-
-```
-┌─────────┐  ┌───────────────────────────────────────────────┐
-│ # Hash  │  │  Symmetric Encryption                         │
-│ E 대칭 ◀│  │                                               │
-│ K 비대칭│  │  금고 종류: [AES-256 ▼]  방식: [GCM ▼]        │
-│ C 인증서│  │                                               │
-│ S 서명  │  │  열쇠:  [                        ] [열쇠 만들기]│
-│ B 인코딩│  │  비번:  [                        ] [비번 만들기]│
-│ R 난수  │  │                                               │
-│ F 파일  │  │  ┌── 원본 ──┐          ┌── 암호문 ──┐         │
-│ T TLS   │  │  │          │[잠그기>>]│            │         │
-│ I 키검사│  │  │          │[<<열기]  │            │         │
-│ ? 목록  │  │  └──────────┘          └────────────┘         │
-└─────────┘  └───────────────────────────────────────────────┘
-```
-
-### 4-2. [Gen Key] = 열쇠 만들기
-
-```
-[열쇠 만들기] 클릭
-    │
-    ▼
-쪽지: "열쇠 만들어줘"
-    │
-    ▼
-운전석 → 대칭암호 담당 → 대칭암호 엔진
-    │
-    ▼
-엔진 내부:
-    ┌───────────────────────────────────────┐
-    │  열쇠 제조기 (generate_key)           │
-    │                                       │
-    │  "AES-256이니까 32바이트 열쇠 필요"    │
-    │                                       │
-    │  OS한테 진짜 랜덤 숫자 요청:           │
-    │  → Windows: "야, 랜덤 숫자 32개 줘"   │
-    │  → OS: "여기 있어" [무작위 32바이트]    │
-    │                                       │
-    │  결과: a37f12c8...e5b9                │
-    └───────────────────────────────────────┘
-    │
-    ▼
-열쇠 칸에 자동으로 채워짐: a37f12c8...e5b9 (64글자)
-```
-
-왜 64글자? 32바이트 × 2 (각 바이트를 16진수 2글자로 표현) = 64글자
-
-### 4-3. [Gen IV] = 일회용 비밀번호
-
-IV(Initialization Vector)는 **같은 열쇠로 잠궈도 매번 다른 결과가 나오게 하는 장치**입니다.
-
-```
-비유: 같은 금고 열쇠인데, 잠글 때마다 다른 비밀번호를 추가로 입력하는 것
-      → 도둑이 하나를 풀어도 다른 건 안 열림
-```
-
-GCM 모드에서는 12바이트(24글자) 랜덤 값이 생성됩니다.
-
-### 4-4. [Encrypt >>] = 금고에 넣고 잠그기 — 가장 복잡한 여행
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│  1단계: 재료 확인 (대칭암호 담당)                            │
-│  ────────────────                                           │
-│                                                             │
-│  "열쇠가 진짜 열쇠 맞아?"                                    │
-│   → 64글자 hex를 32바이트로 변환 시도                        │
-│   → 성공하면 다음 단계                                      │
-│   → 실패하면? 빨간 경고등! "Invalid hex in key or IV"        │
-│                                                             │
-│         ✅ 열쇠 OK          ❌ 열쇠 이상함                   │
-│         ✅ 비번 OK          → 빨간 에러 박스 표시             │
-│            │                → 여기서 멈춤                    │
-│            ▼                                                │
-│                                                             │
-│  2단계: 엔진에 넣기                                          │
-│  ──────────────                                             │
-│                                                             │
-│  대칭암호 담당 → 엔진: "AES-256, GCM 모드로 암호화해줘"      │
-│                                                             │
-│         ┌───────────────────────────────────────────┐       │
-│         │  AES-256-GCM 금고                         │       │
-│         │                                           │       │
-│         │  투입:                                    │       │
-│         │    열쇠 = 32바이트                         │       │
-│         │    비번 = 12바이트                         │       │
-│         │    원본 = "secret"                        │       │
-│         │                                           │       │
-│         │  금고 안에서 일어나는 일:                   │       │
-│         │    ① "secret"을 수학적으로 뒤섞음           │       │
-│         │    ② 뒤섞인 결과 + 봉인 딱지(16바이트) 생성 │       │
-│         │       (봉인 딱지 = 누가 몰래 바꿨는지 확인용)│       │
-│         │                                           │       │
-│         │  산출:                                    │       │
-│         │    암호문 = [뒤섞인 데이터 + 봉인 딱지]     │       │
-│         │    (원본 6바이트 + 딱지 16바이트 = 22바이트) │       │
-│         └───────────────────────────────────────────┘       │
-│                  │                                          │
-│                  ▼                                          │
-│                                                             │
-│  3단계: 결과 포장 (Base64 인코딩)                            │
-│  ──────────────────────────────                              │
-│                                                             │
-│  암호문은 바이너리(사람이 읽을 수 없는 숫자 나열)이라서       │
-│  Base64로 변환합니다.                                       │
-│                                                             │
-│  비유: 외국 주소를 로마자로 적는 것                           │
-│    바이너리 [0xa3, 0x7f, ...]  →  "AxK9f2nR...Qw=="         │
-│    (컴퓨터용)                      (사람이 복사 가능)         │
-│                                                             │
-│                  │                                          │
-│                  ▼                                          │
-│                                                             │
-│  4단계: 화면에 표시                                          │
-│  ──────────────                                             │
-│                                                             │
-│  ┌── 원본 ──────┐           ┌── 암호문 ────────────┐        │
-│  │ secret       │ [잠그기>>]│ AxK9f2nR...Qw==     │        │
-│  └──────────────┘ [<<열기]  └─────────────────────┘        │
-│                                                             │
-│  계기판: "Encrypted successfully"                            │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 4-5. 에러가 나면? — 자동차 경고등
-
-열쇠 길이가 안 맞거나, 형식이 틀리면:
-
-```
-┌─ 정상 ──────────────────┐   ┌─ 에러 ─────────────────────┐
-│                         │   │  ┌─────────────────────┐   │
-│  (결과가 잘 나옴)        │   │  │ ⚠ invalid length    │   │
-│  계기판: 성공!           │   │  │   빨간 배경, 빨간 테두리│   │
-│                         │   │  └─────────────────────┘   │
-└─────────────────────────┘   └────────────────────────────┘
-                                자동차 엔진 경고등과 같음!
-```
-
-에러 메시지는 엔진(crypto/)에서 만들어져서,
-대칭암호 담당(symmetric_tab)을 거쳐,
-화면에 빨간 박스로 표시됩니다.
-
----
-
-## 5. "쪽지 시스템" 이해하기 (가장 중요한 개념)
-
-이 프로그램의 모든 동작은 **쪽지(Message)**로 이루어집니다.
-
-### 비유: 회사 내부 우편 시스템
-
-```
-┌──────────────────────────────────────────────────────┐
-│                     회사 (앱)                         │
-│                                                      │
-│  ┌────────────┐    쪽지     ┌────────────┐           │
-│  │ 접수처     │ ─────────▶ │ 총무과장   │           │
-│  │ (화면)     │            │ (app.rs)   │           │
-│  │            │            │            │           │
-│  │ 고객이     │            │ "해시 관련  │           │
-│  │ 버튼 누름  │            │  이니까    │           │
-│  └────────────┘            │  해시부서로"│           │
-│                            └─────┬──────┘           │
-│                                  │                   │
-│                    ┌─────────────┼──────────┐        │
-│                    ▼             ▼          ▼        │
-│              ┌──────────┐ ┌──────────┐ ┌────────┐   │
-│              │ 해시 부서 │ │ 암호 부서 │ │서명부서│   │
-│              │(hash_tab)│ │(sym_tab) │ │(sig_tab│   │
-│              └────┬─────┘ └──────────┘ └────────┘   │
-│                   │                                  │
-│                   ▼                                  │
-│              ┌──────────┐                            │
-│              │ 해시 엔진 │  ← 실제 계산하는 기계     │
-│              │(hashing) │                            │
-│              └──────────┘                            │
-└──────────────────────────────────────────────────────┘
-```
-
-쪽지에는 **봉투**가 있습니다:
-
-```
-┌─ 봉투 (Message) ────────────┐
-│                             │
-│  보낸 부서: Hash            │  ← app.rs가 이걸 보고 분류
-│                             │
-│  ┌─ 내용물 (Msg) ─────────┐ │
-│  │ 종류: "계산해!"         │ │  ← 해시 부서가 이걸 보고 처리
-│  └────────────────────────┘ │
-│                             │
-└─────────────────────────────┘
-
-코드로 보면:
-  Message::Hash(Msg::Compute)
-  ~~~~~~~~~~~~~                  ← 봉투 (어느 부서인지)
-               ~~~~~~~~~~~~     ← 내용물 (뭘 해야 하는지)
-```
-
-### 쪽지의 종류
-
-각 부서(탭)마다 쓸 수 있는 쪽지 종류가 정해져 있습니다:
-
-```
-해시 부서의 쪽지:
-  "알고리즘이 바뀌었어"     → 새 알고리즘 기억해둠
-  "입력값이 바뀌었어"       → 새 입력값 기억해둠
-  "계산해!"               → 엔진 가동 → 결과 저장
-  "복사해!"               → 결과를 클립보드에 복사
-
-대칭암호 부서의 쪽지:
-  "알고리즘이 바뀌었어"     → AES-128/192/256, DES, 3DES
-  "모드가 바뀌었어"        → CBC or GCM
-  "열쇠가 바뀌었어"        → 새 열쇠 기억
-  "비번이 바뀌었어"        → 새 IV 기억
-  "원본이 바뀌었어"        → 새 평문 기억
-  "암호문이 바뀌었어"      → 새 암호문 기억
-  "열쇠 만들어!"           → 랜덤 열쇠 생성
-  "비번 만들어!"           → 랜덤 IV 생성
-  "잠궈!"                 → 암호화 엔진 가동
-  "열어!"                 → 복호화 엔진 가동
-```
-
----
-
-## 6. 비동기 = 정비소에 맡기기
-
-해시나 대칭암호는 순식간에 끝납니다 (밀리초 이하).
-하지만 **RSA 키 생성**(큰 소수 찾기)이나 **TLS 연결**(인터넷 통신)은 수 초가 걸립니다.
-
-이걸 기다리면 앱이 멈춘 것처럼 보이겠죠?
-
-```
-┌─ 동기 처리 (해시, 대칭암호) ──────────────────────────┐
-│                                                       │
-│  버튼 클릭 → 계산 → 결과 → 화면 갱신                  │
-│                                                       │
-│  시간: ────●──── (한 순간에 끝남)                      │
-│                                                       │
-│  비유: 자판기에서 음료 뽑기 (버튼 누르면 바로 나옴)     │
-│                                                       │
-└───────────────────────────────────────────────────────┘
-
-┌─ 비동기 처리 (RSA, TLS) ─────────────────────────────┐
-│                                                       │
-│  버튼 클릭 → "정비소에 맡겨!" → 화면: "작업 중..."     │
-│                                   (앱은 안 멈춤)       │
-│              정비소가 열심히 작업 중...                 │
-│              ...                                      │
-│              "다 됐어!" → 결과 → 화면 갱신             │
-│                                                       │
-│  시간: ────●═══════════════●──── (시간이 걸림)         │
-│           시작           완료                          │
-│                                                       │
-│  비유: 세차장에 차를 맡기고 커피 마시다가               │
-│        "다 됐습니다" 연락 받기                         │
-│                                                       │
-└───────────────────────────────────────────────────────┘
-```
-
-코드에서는:
-- 즉시 끝나는 일: `Task::none()` 반환 (= "맡길 거 없어")
-- 시간 걸리는 일: `Task::perform(작업, 완료시_보낼_쪽지)` 반환 (= "이거 정비소에 맡겨")
-
----
-
-## 7. 전체 그림: 프로그램 = 자동차 한 대
-
-```
-┌═══════════════════════════════════════════════════════════════════┐
-║                                                                   ║
-║     시동 키 (main.rs)                                             ║
-║        │                                                          ║
-║        ▼                                                          ║
-║     ┌──────────────────────────────────────────────────┐          ║
-║     │  운전석 (app.rs)                                  │          ║
-║     │                                                  │          ║
-║     │  상태 보관함:                                     │          ║
-║     │  ┌────┬────┬────┬────┬────┬────┬────┬────┬────┐ │          ║
-║     │  │해시│대칭│비대│인증│서명│인코│난수│파일│TLS │ │          ║
-║     │  │상태│상태│칭  │서  │상태│딩  │상태│암호│상태│ │          ║
-║     │  │    │    │상태│상태│    │상태│    │상태│    │ │          ║
-║     │  └────┴────┴────┴────┴────┴────┴────┴────┴────┘ │          ║
-║     │                                                  │          ║
-║     │  쪽지가 오면 → 해당 부서에 전달                    │          ║
-║     │  화면 그릴 때 → 현재 탭의 화면을 보여줌            │          ║
-║     └──────────────────────────────────────────────────┘          ║
-║            │                              │                       ║
-║     ┌──────┴──────┐              ┌────────┴────────┐              ║
-║     │ 대시보드     │              │  엔진룸          │              ║
-║     │ (ui/ 폴더)  │              │  (crypto/ 폴더)  │              ║
-║     │             │              │                  │              ║
-║     │ 화면을      │  ──재료──▶   │  재료 받으면      │              ║
-║     │ 그리고      │              │  결과 내놓음      │              ║
-║     │ 쪽지를      │  ◀──결과──   │                  │              ║
-║     │ 만드는 곳   │              │  화면은 전혀      │              ║
-║     │             │              │  신경 안 씀       │              ║
-║     └─────────────┘              └──────────────────┘              ║
-║                                                                   ║
-║     ┌─────────────────────────────────────────────────────┐       ║
-║     │  외관 색상표 (theme.rs)                              │       ║
-║     │  파란색=#3380F2  빨간색=#E64040  배경=#F2F2F7  ...  │       ║
-║     └─────────────────────────────────────────────────────┘       ║
-║                                                                   ║
-╚═══════════════════════════════════════════════════════════════════╝
-```
-
-### 한 문장 요약
-
-> **사용자가 버튼을 누르면 → 쪽지가 만들어지고 → 운전석이 분류해서 →
-> 해당 부서가 엔진을 돌리고 → 결과를 저장하면 → 화면이 새로 그려진다.**
-
-이것이 모든 기능에 동일하게 적용되는 패턴입니다.
-해시든, 암호화든, 인증서 생성이든, TLS 연결이든 — 전부 이 순서입니다.
